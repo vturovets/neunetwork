@@ -1,84 +1,119 @@
 # NeuNetwork
 
-A small, configurable **PyTorch** MNIST project with a clean **Typer** CLI. Train a feed‑forward MLP, evaluate on the test set, run inference on your images, and generate Markdown/plot reports.
-
-> This README is aligned with **NN SRS V2** and **Solution Design V2**. It explicitly documents the `report.py`, `report_train.py`, and `info.py` modules.
+A minimal Python CLI to study how feed-forward neural networks operate on **MNIST**.  
+Built with **PyTorch** and **Typer**, it supports configurable layers/activations, training/evaluation, and inference on user images.  
+Artifacts include metrics (JSON), plots (loss curve, confusion matrix), and checkpoints (`best.pt`, `last.pt`).
 
 ---
 
 ## Features
 
-- **Config‑driven MLP** (layers, activations, dropout, weight decay)
-- **Train/Eval/Infer** commands with sensible defaults
-- **Reports**
-  - Training log (`training_log.md`) + loss curve via **report_train.py**
-  - Evaluation summary (`evaluation.md`) + confusion matrix via **report.py**
-- **Reproducibility**: seeds, saved resolved config, pinned deps
-- **Transparency**: `neunet info` to inspect checkpoints (layers, params, device, config)
-- **CPU‑friendly**, auto‑uses GPU/MPS if available
+- **Dataset**: MNIST (28×28 grayscale)
+- **Architecture**: `784 → [hidden_i] → 10`
+    - Configurable hidden layers (`--layers`) and activations (`--activations`)
+    - Supported activations: `relu`, `tanh`, `sigmoid`, `linear`
+- **Regularization**
+    - **Dropout** (`--dropout`, default 0.0)
+    - **L2 weight decay** (`--weight-decay`, default 0.0)
+- **Training**
+    - Optimizer: **Adam** only (learning rate configurable)
+    - Logs train loss per epoch; optional val split and val loss
+    - Saves checkpoints (`last.pt`, `best.pt`)
+    - Updates `runs/metrics.json` and plots `runs/loss_curve.png`
+- **Evaluation**
+    - Computes **test loss** and **test accuracy**
+    - Generates `runs/confusion_matrix.png`
+    - Produces `runs/evaluation.md`
+- **Inference**
+    - Accepts PNG/JPG/BMP/TIFF
+    - Auto-converts to grayscale 28×28, normalizes
+    - Outputs JSON (`infer.json`) with predicted label, probability, and top-K list
+- **Device auto-select**: uses CUDA/MPS if available, else CPU
 
 ---
 
-## Install
+## Project Structure
+
+```
+neunetwork/
+  neunet/
+    cli.py, config.py, data.py, models.py, train.py, eval.py, infer.py, utils.py
+  configs/default.yaml
+  models/               # best.pt, last.pt
+  runs/                 # metrics.json, plots, evaluation.md
+  tests/
+  README.md
+  requirements.txt
+```
+
+---
+
+## Installation
 
 ```bash
-# 1) Create and activate a virtual environment (recommended)
-python -m venv .venv
-# Windows
-.venv\Scripts\activate
-# macOS/Linux
-source .venv/bin/activate
-
-# 2) Install
-pip install -r requirements.txt
-# (or) if packaged:
-# pip install -e .
+git clone https://github.com/vturovets/neunetwork.git
+cd neunetwork
+pip install -e .
 ```
+
+Requirements: Python 3.10+, PyTorch 2.x, torchvision, Matplotlib.
 
 ---
 
-## Project Layout
+## CLI Usage
 
+### Init
+```bash
+neunet init
 ```
-neunet/
-  __init__.py
-  cli.py            # Typer app with subcommands
-  config.py         # load/merge/validate YAML + flag overrides
-  data.py           # MNIST datasets & transforms (+infer preprocessing)
-  models.py         # MLP builder from YAML/flags
-  train.py          # training loop, optimizer, checkpoints
-  eval.py           # test-set evaluation entry
-  infer.py          # image preprocessing & prediction (top-k)
-  report.py         # evaluation reporting (evaluation.md, confusion matrix)
-  report_train.py   # training reporting (loss curves, verdicts, recommended actions)
-  info.py           # checkpoint inspection (layers, params, device, config)
-  utils.py          # device pick, seeding, plotting, md helpers
-configs/
-  default.yaml
-models/             # best.pt, last.pt
-runs/               # metrics.json, plots, evaluation.md, training_log.md
-tests/
-README.md
-requirements.txt
+Scaffolds config, models, runs folders.
+
+### Train
+```bash
+# Baseline (Adam, no regularization)
+neunet train --layers 128,64 --activations relu,relu --epochs 5 --batch-size 64 --lr 1e-3
+
+# With Dropout
+neunet train --layers 128,64 --activations relu,relu --dropout 0.2
+
+# With L2 (weight decay)
+neunet train --layers 256,128 --activations relu,relu --weight-decay 1e-4
+
+# With both
+neunet train --layers 256,128 --activations relu,relu --dropout 0.2 --weight-decay 1e-4
 ```
+
+Produces:
+- `models/last.pt`, `models/best.pt`
+- `runs/metrics.json`, `runs/loss_curve.png`
+
+### Eval
+```bash
+neunet eval --checkpoint models/best.pt
+```
+Outputs:
+- Test loss, test accuracy (console + `metrics.json`)
+- `runs/confusion_matrix.png`
+- `runs/evaluation.md`
+
+### Infer
+```bash
+neunet infer --images path/to/imgs --checkpoint models/best.pt --out runs/infer.json --topk 3
+```
+
+### Info
+```bash
+neunet info --checkpoint models/best.pt
+```
+Shows checkpoint metadata.
 
 ---
 
-## Configuration
+## Config File
 
-`configs/default.yaml` (example):
+Default: `configs/default.yaml`
+
 ```yaml
-seed: 42
-device: auto
-
-data:
-  dataset: MNIST
-  root: ./data
-  download: true
-  num_workers: 2
-  val_split: 0.0
-  normalization: {mean: 0.1307, std: 0.3081}
-
 model:
   input_size: 784
   layers: [128, 64]
@@ -91,91 +126,38 @@ train:
   batch_size: 64
   lr: 0.001
   weight_decay: 0.0
-
-artifacts:
-  models_dir: ./models
-  runs_dir: ./runs
 ```
-> Flags override YAML at runtime. The **resolved config** is saved alongside artifacts for reproducibility.
+
+Flags override YAML values; resolved config is saved with artifacts.
 
 ---
 
-## CLI Usage (Typer)
+## Artifacts
 
-```bash
-# Show help
-python -m neunet.cli --help
-```
-
-### Init
-```bash
-python -m neunet.cli init
-# Creates configs/default.yaml, models/, runs/, data/ (if missing)
-```
-
-### Train
-```bash
-python -m neunet.cli train   --layers 128,64   --activations relu,relu   --epochs 5   --batch-size 64   --lr 1e-3   --device auto   --config configs/default.yaml
-# Artifacts: models/last.pt, models/best.pt, runs/loss_curve.png, runs/training_log.md
-```
-
-### Eval
-```bash
-python -m neunet.cli eval   --checkpoint models/best.pt
-# Updates runs/metrics.json (test_loss, test_acc), writes runs/confusion_matrix.png, runs/evaluation.md
-```
-
-### Infer
-```bash
-python -m neunet.cli infer   --images ./my_imgs2   --checkpoint models/best.pt   --topk 3   --out runs/infer.json
-# Robust to PNG/JPG/JPEG/BMP/TIFF; auto grayscale 28x28 + normalize
-```
-
-### Info
-```bash
-python -m neunet.cli info   --checkpoint models/best.pt
-# Prints layers, activations, parameter count, device, and training config snapshot
-```
+- `models/best.pt` – checkpoint with lowest val loss
+- `models/last.pt` – last epoch
+- `runs/metrics.json` – `{"train_loss":[...], "val_loss":[...], "test_loss":..., "test_acc":...}`
+- `runs/loss_curve.png` – train/val loss plot
+- `runs/confusion_matrix.png` – test set confusion matrix
+- `runs/evaluation.md` – Markdown summary for presentation
 
 ---
 
-## Outputs & Reports
+## Development & Testing
 
-- **Training (report_train.py)**
-  - `runs/training_log.md` — epoch metrics, **verdict** (OK/Overfitting), **Recommended actions**
-  - `runs/loss_curve.png`
-- **Evaluation (report.py)**
-  - `runs/evaluation.md` — dataset, resolved config, **test_loss**, **test_acc**, artifact links
-  - `runs/confusion_matrix.png`
-- **Inference JSON schema**
-```json
-[
-  {
-    "file": "path/to/img.png",
-    "pred": 7,
-    "pred_prob": 0.9912,
-    "topk": [
-      {"label": 7, "prob": 0.9912},
-      {"label": 1, "prob": 0.0061},
-      {"label": 9, "prob": 0.0010}
-    ]
-  }
-]
-```
+- **Unit tests** in `tests/` for model builder, config, preprocessing
+- **Integration**: 1-epoch CPU run produces artifacts
+- **Dependencies** pinned in `requirements.txt`
 
 ---
 
-## Tips & Troubleshooting
+## Roadmap (Phase 2)
 
-- **CUDA/MPS**: keep `--device auto` to use accelerators when available.
-- **Determinism**: set `seed` and avoid nondeterministic ops for strict reproducibility.
-- **Images for `infer`**: use high‑contrast digits on plain backgrounds for best results.
-- **Checkpoints**: `best.pt` is selected by lowest validation loss (or final epoch when no val split). Use `info` to inspect.
-- **Permissions**: on Unix, ensure the repo files are readable/executable as needed.
+Out of scope for v1 but planned:
+- `neunet compare` for P95 statistical comparison (bootstrap CIs, p-values).
 
 ---
 
-## Roadmap (Phase‑2)
+## License
 
-- `neunet compare` for **P95 statistical comparison** (bootstrap CIs, p‑values)
-- Advanced schedulers/regularization; more architectures (e.g., CNN baselines)
+MIT
