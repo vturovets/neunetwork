@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "neunetwork"
+version = "0.1.0"
+description = "NeuNetwork: a minimal CLI for a feed-forward NN (MNIST) with train/eval/infer."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{name = "Your Name"}]
+dependencies = [
+    "torch>=2.2",
+    "torchvision>=0.17",
+    "typer>=0.9",
+    "pyyaml>=6.0",
+    "tqdm>=4.66",
+    "pillow>=10.2",
+    "numpy>=1.26",
+    "matplotlib>=3.8",
+    "scikit-learn>=1.4",
+    "tabulate>=0.9"
+]
+
+[tool.setuptools]
+packages = ["neunet"]
+
+[project.scripts]
+neunet = "neunet.cli:app"
