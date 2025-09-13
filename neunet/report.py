@@ -1,9 +1,9 @@
-
 from __future__ import annotations
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional
 import os, json, re, time
 from pathlib import Path
 
+# Default filename/parent-folder label detectors (works for MNIST-style sets)
 DEFAULT_REGEXES = [
     r"[_\-\.]label(?P<label>\d)\b",
     r"[\-_](?P<label>\d)\b",
@@ -33,6 +33,7 @@ def _extract_label(path: str, regex: Optional[str]) -> Optional[int]:
     lbl = _extract_label_from_name(p.stem, DEFAULT_REGEXES)
     if lbl is not None:
         return lbl
+    # Parent folder fallback (e.g., ".../7/img.png")
     try:
         parent = p.parent.name
         if parent.isdigit() and int(parent) in range(10):
@@ -63,7 +64,7 @@ def build_report(infer_json_path: str, out_md_path: str, *, label_regex: Optiona
             continue
         pred = it.get("pred")
         pred_prob = it.get("pred_prob")
-        topk = it.get("topk", [])
+        topk = it.get("topk", []) or []
 
         true = _extract_label(fp, label_regex)
         if true is None:
@@ -72,12 +73,11 @@ def build_report(infer_json_path: str, out_md_path: str, *, label_regex: Optiona
             continue
 
         correct = (pred == true)
+        status = "correct" if correct else "wrong"
         if correct:
             n_correct += 1
-            status = "correct"
         else:
             n_wrong += 1
-            status = "wrong"
         n_with_label += 1
 
         rows.append({
@@ -126,7 +126,11 @@ def build_report(infer_json_path: str, out_md_path: str, *, label_regex: Optiona
             f.write("| file | true | pred | pred_prob | top-3 |\n")
             f.write("|---|---:|---:|---:|---|\n")
             for r in wrong_rows[:200]:
-                top = ", ".join([f"{d['label']}({d['prob']:.2f})" for d in r.get("topk", [])[:3]])
+                # Defensive formatting for top-k
+                def _fmt(d):
+                    try:    return f"{int(d.get('label'))}({float(d.get('prob')):.2f})"
+                    except: return str(d)
+                top = ", ".join([_fmt(d) for d in (r.get("topk") or [])[:3]])
                 f.write(f"| {r['file']} | {r.get('true','')} | {r.get('pred','')} | {r.get('pred_prob','')} | {top} |\n")
             if len(wrong_rows) > 200:
                 f.write(f"\n_+{len(wrong_rows)-200} more not shown_\n")

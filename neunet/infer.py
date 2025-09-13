@@ -1,79 +1,124 @@
-"""Inference pipeline."""
+# neunet/infer.py
 from __future__ import annotations
-from typing import Dict, Any, List
-import os, json, time
+
+import json
+from collections import OrderedDict
 from pathlib import Path
-from PIL import Image
+from typing import Any, Dict, List
+
 import torch
-import torch.nn.functional as F
+import torch.serialization as torch_serial
+from pickle import UnpicklingError
+from torch.nn import functional as F
+from PIL import Image
 from torchvision import transforms
 
-from . import utils
-from .models import build_mlp
+from .config import load_config, resolve_config
+from .models import build_mlp_from_cfg
+from .utils import pick_device, ensure_dir
 
-IMG_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".ppm", ".pgm"}
 
-def _collect_images(path: str, recursive: bool) -> List[str]:
+# ---- checkpoint loading compatible with PyTorch 2.6+ ----
+def _load_checkpoint_any(ckpt_path: Path, device: torch.device):
+    # 1) try safe default
+    try:
+        return torch.load(ckpt_path, map_location=device)
+    except (UnpicklingError, RuntimeError, AttributeError):
+        pass
+    # 2) allowlist TorchVersion and retry safely
+    try:
+        torch_serial.add_safe_globals([torch.torch_version.TorchVersion])
+        return torch.load(ckpt_path, map_location=device)
+    except Exception:
+        pass
+    # 3) final fallback (trusted files only)
+    return torch.load(ckpt_path, map_location=device, weights_only=False)
+
+
+def _extract_state_dict(blob: Any) -> OrderedDict:
+    if isinstance(blob, OrderedDict):
+        return blob
+    if hasattr(blob, "state_dict"):
+        return blob.state_dict()  # nn.Module
+    if isinstance(blob, dict):
+        if "model_state" in blob:
+            return blob["model_state"]
+        if "state_dict" in blob:
+            return blob["state_dict"]
+        if "model" in blob and hasattr(blob["model"], "state_dict"):
+            return blob["model"].state_dict()
+    raise TypeError("Unsupported checkpoint format; expected state_dict or model container.")
+
+
+# ---- image discovery ----
+_IMG_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
+
+
+def _gather_paths(path: str, recursive: bool) -> List[Path]:
     p = Path(path)
-    files: List[Path] = []
+    if not p.exists():
+        raise FileNotFoundError(f"Path not found: {p}")
     if p.is_file():
-        files = [p]
-    elif p.is_dir():
-        if recursive:
-            for dirpath, _, filenames in os.walk(p):
-                for name in filenames:
-                    if Path(name).suffix.lower() in IMG_EXTS:
-                        files.append(Path(dirpath) / name)
-        else:
-            files = [c for c in p.iterdir() if c.is_file() and c.suffix.lower() in IMG_EXTS]
-    return [str(f) for f in files]
+        return [p]
+    it = p.rglob("*") if recursive else p.glob("*")
+    return [x for x in it if x.is_file() and x.suffix.lower() in _IMG_EXTS]
 
-def _preprocess(mean: float, std: float):
-    return transforms.Compose([
-        transforms.Grayscale(),      # ensure 1 channel
-        transforms.Resize((28, 28)),
-        transforms.ToTensor(),
-        transforms.Normalize((mean,), (std,)),
-    ])
 
-def infer(images_path: str, checkpoint: str, out_path: str, *, topk: int = 3, recursive: bool = False) -> None:
-    mean = 0.1307
-    std = 0.3081
-    tfm = _preprocess(mean, std)
+# ---- main API ----
+def infer(images_path: str,
+          checkpoint: str = "models/best.pt",
+          out: str = "runs/infer.json",
+          topk: int = 3,
+          recursive: bool = False,
+          config: str = "configs/default.yaml") -> List[Dict[str, Any]]:
 
-    device_str = utils.pick_device("auto")
-    device = torch.device(device_str)
+    # config + device
+    cfg = resolve_config(load_config(config))
+    device = pick_device(cfg.get("device", "auto"))
 
-    model_cfg = {
-        "model": {"input_size": 784, "layers": [128, 64], "activations": ["relu", "relu"], "output_size": 10, "dropout": 0.0}
-    }
-    # Build default MLP; real runs should use same config as training.
-    from .config import default_config, deep_update
-    cfg = default_config()
-    deep_update(cfg, model_cfg)
-    model = build_mlp(cfg).to(device)
-
-    state = torch.load(checkpoint, map_location=device)
-    model.load_state_dict(state)
+    # model + checkpoint
+    model = build_mlp_from_cfg(cfg).to(device)
+    ckpt = Path(checkpoint)
+    if not ckpt.exists():
+        raise FileNotFoundError(f"Checkpoint not found: {ckpt}")
+    blob = _load_checkpoint_any(ckpt, device)
+    state_dict = _extract_state_dict(blob)
+    model.load_state_dict(state_dict, strict=False)
     model.eval()
 
-    files = _collect_images(images_path, recursive=recursive)
-    results = []
+    # transform (MNIST)
+    norm = cfg["data"].get("normalization", {"mean": 0.1307, "std": 0.3081})
+    tfm = transforms.Compose([
+        transforms.Grayscale(num_output_channels=1),
+        transforms.Resize((28, 28)),
+        transforms.ToTensor(),
+        transforms.Normalize((norm["mean"],), (norm["std"],)),
+    ])
+
+    # gather files
+    files = _gather_paths(images_path, recursive=recursive)
+
+    results: List[Dict[str, Any]] = []
     for fp in files:
         try:
-            img = Image.open(fp).convert("L")
-            x = tfm(img).view(1, -1).to(device)
-            with torch.no_grad():
-                logits = model(x)
-                probs = F.softmax(logits, dim=1).cpu().view(-1)
-                prob_vals, idxs = torch.topk(probs, k=min(topk, probs.numel()))
-                top = [{"label": int(i.item()), "prob": float(p.item())} for p, i in zip(prob_vals, idxs)]
-                pred = int(torch.argmax(probs).item())
-                pred_prob = float(probs[pred].item())
-            results.append({"file": fp, "topk": top, "pred": pred, "pred_prob": pred_prob})
+            im = Image.open(fp).convert("L")
+            x = tfm(im).unsqueeze(0).to(device)  # [1,1,28,28]
+            logits = model(x)                   # model flattens internally
+            probs = F.softmax(logits, dim=-1)[0]  # [10]
+            p_max, pred_idx = torch.max(probs, dim=0)
+            k = int(min(topk, probs.numel()))
+            top_p, top_i = torch.topk(probs, k)
+            results.append({
+                "file": str(fp),
+                "pred": int(pred_idx.item()),
+                "pred_prob": float(p_max.item()),
+                "topk": [{"label": int(i), "prob": float(p)} for p, i in zip(top_p.tolist(), top_i.tolist())],
+            })
         except Exception as e:
-            results.append({"file": fp, "error": str(e)})
+            results.append({"file": str(fp), "error": str(e)})
 
-    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
-    with open(out_path, "w", encoding="utf-8") as f:
-        json.dump(results, f, indent=2)
+    # write JSON
+    out_path = Path(out)
+    ensure_dir(out_path.parent)
+    out_path.write_text(json.dumps(results, indent=2), encoding="utf-8")
+    return results

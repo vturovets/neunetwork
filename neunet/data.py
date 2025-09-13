@@ -45,4 +45,12 @@ def get_dataloaders(cfg: Dict[str, Any]):
         train_loader = DataLoader(train_full, batch_size=batch_size, shuffle=True, num_workers=num_workers, pin_memory=True)
 
     test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=True)
+
     return train_loader, val_loader, test_loader
+
+    # --- Backward-compat alias ---
+    try:
+        build_dataloaders
+    except NameError:
+        # expose the old name so legacy imports keep working
+        build_dataloaders = get_dataloaders

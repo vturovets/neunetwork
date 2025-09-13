@@ -1,32 +1,29 @@
 seed: 42
 device: auto
-
 data:
   dataset: MNIST
   root: ./data
   download: true
   num_workers: 2
-  val_split: 0.0
-  normalization: {mean: 0.1307, std: 0.3081}
-
+  val_split: 0.1
+  normalization:
+    mean: 0.1307
+    std: 0.3081
 model:
   input_size: 784
-  layers: [128, 64]
-  activations: [relu, relu]
+  layers:
+  - 128
+  - 64
+  activations:
+  - relu
+  - relu
   output_size: 10
-  dropout: 0.0
-
+  dropout: 0.2
 train:
   epochs: 5
   batch_size: 64
-  optimizer: adam
   lr: 0.001
-  early_stopping:
-    enabled: false
-    patience: 3
-    min_delta: 0.0
-    metric: val_loss
-
+  weight_decay: 0.0001
 artifacts:
   models_dir: ./models
   runs_dir: ./runs

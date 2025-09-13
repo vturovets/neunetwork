@@ -1,14 +1,19 @@
+from __future__ import annotations
 
-from typing import Optional
-import typer
-from . import config as cfgmod
-from . import train as trainmod
-from . import eval as evalmod
-from . import infer as infermod
 from . import utils
 from . import report as reportmod
 from . import report_train as trainlogmod
-
+from . import config as cfgmod  # <-- needed for default_config()
+import json
+import typer
+from .config import load_config, save_config, resolve_config
+from .train import train as train_fn
+from typing import Optional
+from .info import model_info
+from .eval import evaluate as eval_fn
+from .report_train import generate_train_log_report
+from . import infer as infermod   # <-- add this
+from .report_train import generate_train_log_report
 
 app = typer.Typer(add_completion=False, no_args_is_help=True, help="NeuNetwork CLI")
 
@@ -25,38 +30,47 @@ def init(config_path: str = "configs/default.yaml"):
 
 @app.command()
 def train(
-        layers: str = typer.Option("128,64", help="Comma-separated hidden sizes, e.g., 128,64"),
-        activations: str = typer.Option("relu,relu", help="Comma-separated activations per hidden layer"),
-        epochs: int = typer.Option(5, min=1),
-        batch_size: int = typer.Option(64, min=1),
-        lr: float = typer.Option(1e-3, min=0.0),
-        seed: int = typer.Option(42),
-        device: str = typer.Option("auto", help="auto|cpu|cuda|mps"),
-        val_split: float = typer.Option(0.0, min=0.0, max=0.5),
-        config_path: str = typer.Option("configs/default.yaml"),
+        layers: str = typer.Option(None, help="Comma-separated hidden sizes, e.g. 128,64"),
+        activations: str = typer.Option(None, help="Comma-separated activations, e.g. relu,relu"),
+        epochs: int = typer.Option(None),
+        batch_size: int = typer.Option(None),
+        lr: float = typer.Option(None, help="Learning rate (Adam)"),
+        dropout: float = typer.Option(None, min=0.0, max=0.99, help="Dropout probability"),
+        weight_decay: float = typer.Option(None, min=0.0, help="L2 weight decay (Adam)"),
+        seed: int = typer.Option(None),
+        device: str = typer.Option(None, help="auto|cpu|cuda|mps"),
+        config: str = typer.Option("configs/default.yaml"),
 ):
-    """Train the model on MNIST and save checkpoints/metrics."""
-    cfg = cfgmod.load_and_resolve(config_path,
-                                  overrides=dict(
-                                      model={"layers": [int(x) for x in layers.split(",") if x] ,
-                                             "activations": [a.strip().lower() for a in activations.split(",") if a]},
-                                      train={"epochs": epochs, "batch_size": batch_size, "lr": lr},
-                                      seed=seed, device=device, data={"val_split": val_split},
-                                  )
-                                  )
-    typer.echo(f"Using device: {utils.pick_device(cfg['device'])}")
-    trainmod.train(cfg)  # TODO: implement
+    cfg = load_config(config)
+
+    if layers:       cfg["model"]["layers"] = [int(x) for x in layers.split(",") if x.strip()]
+    if activations:  cfg["model"]["activations"] = [a.strip().lower() for a in activations.split(",")]
+    if epochs is not None:       cfg["train"]["epochs"] = int(epochs)
+    if batch_size is not None:   cfg["train"]["batch_size"] = int(batch_size)
+    if lr is not None:           cfg["train"]["lr"] = float(lr)
+    if dropout is not None:      cfg["model"]["dropout"] = float(dropout)           # ← NEW
+    if weight_decay is not None: cfg["train"]["weight_decay"] = float(weight_decay) # ← NEW
+    if seed is not None:         cfg["seed"] = int(seed)
+    if device:                   cfg["device"] = device
+
+    # Hard-lock to Adam; ignore legacy optimizer key if present
+    cfg.get("train", {}).pop("optimizer", None)
+
+    cfg = resolve_config(cfg)
+    save_config(cfg, config)
+    train_fn(cfg)
 
 @app.command()
 def eval(
-        checkpoint: str = typer.Option("models/best.pt"),
-        metrics_out: str = typer.Option("runs/metrics.json"),
-        plots_out: str = typer.Option("runs/"),
-        config_path: str = typer.Option("configs/default.yaml"),
+        checkpoint: str = typer.Option("models/best.pt", help="Path to checkpoint"),
+        metrics_out: str = typer.Option("runs/metrics.json", help="Where to write metrics JSON"),
+        plots_out: str = typer.Option("runs/", help="Where to write plots"),
+        config: str = typer.Option("configs/default.yaml", help="Config YAML"),
 ):
-    """Evaluate test accuracy and test loss; write metrics and plots."""
-    cfg = cfgmod.load_and_resolve(config_path)
-    evalmod.evaluate(cfg, checkpoint, metrics_out, plots_out)  # TODO: implement
+    cfg = load_config(config)
+    cfg = resolve_config(cfg)
+    res = eval_fn(cfg, checkpoint=checkpoint, metrics_out=metrics_out, plots_out=plots_out)
+    typer.echo(json.dumps(res, indent=2, default=str))
 
 @app.command()
 def infer(
@@ -72,6 +86,16 @@ def infer(
     if not images_path:
         raise typer.BadParameter("Provide a path via POSITIONAL `IMAGES` or --images/-i.")
     infermod.infer(images_path, checkpoint, out, topk=topk, recursive=recursive)
+
+
+@app.command("train-log")
+def train_log_cmd(
+        metrics: str = typer.Option("runs/metrics.json", help="Path to training metrics JSON"),
+        out_md: str = typer.Option("runs/train_log.md", help="Where to write the training log"),
+        eval_json: str | None = typer.Option(None, help="Optional JSON with test metrics"),
+):
+    res = generate_train_log_report(metrics_path=metrics, eval_path=eval_json, out_path=out_md)
+    typer.echo(f"Training log written to: {res['path']}")
 
 
 @app.command()
@@ -95,6 +119,16 @@ def log_report_cmd(
     """
     res = trainlogmod.generate_train_log_report(metrics_path=metrics, eval_path=eval, out_path=out)
     typer.echo(f"Wrote {out}. Verdict: {res['verdict']}")
+
+@app.command()
+def info(
+        checkpoint: str = typer.Option("models/best.pt", help="Path to .pt ('' to skip)"),
+        config: str = typer.Option("configs/default.yaml", help="YAML config"),
+        out_md: str | None = typer.Option(None, help="If set, write a Markdown summary here"),
+):
+    res = model_info(config_path=config, checkpoint=(checkpoint or None), out_md=out_md)
+    # pretty print to console
+    typer.echo(json.dumps(res, indent=2, default=str))
 
 if __name__ == "__main__":
     app()
