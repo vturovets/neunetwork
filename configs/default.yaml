@@ -7,23 +7,25 @@ data:
   num_workers: 2
   val_split: 0.1
   normalization:
-    mean: 0.1307
-    std: 0.3081
+    mean: 0.072
+    std: 0.196
 model:
   input_size: 784
   layers:
   - 128
   - 64
+  - 32
   activations:
+  - relu
   - relu
   - relu
   output_size: 10
   dropout: 0.2
 train:
-  epochs: 5
+  epochs: 14
   batch_size: 64
   lr: 0.001
-  weight_decay: 0.0001
+  weight_decay: 0.001
 artifacts:
   models_dir: ./models
   runs_dir: ./runs

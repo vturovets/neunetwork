@@ -101,9 +101,9 @@ def train_log_cmd(
 
 @app.command()
 def report(
-    infer_json: str = typer.Option("runs/infer.json", "--infer-json", "-j"),
-    out: str = typer.Option("runs/infer_report.md", "--out", "-o"),
-    label_regex: str = typer.Option(None, help="Optional regex with (?P<label>\\d) group to extract true label from filename"),
+        infer_json: str = typer.Option("runs/infer.json", "--infer-json", "-j"),
+        out: str = typer.Option("runs/infer_report.md", "--out", "-o"),
+        label_regex: str = typer.Option(None, help="Optional regex with (?P<label>\\d) group to extract true label from filename"),
 ):
     res = reportmod.build_report(infer_json, out, label_regex=label_regex)
     typer.echo(f"Wrote {out}. Error rate: {res['summary']['error_rate']:.2%}")
