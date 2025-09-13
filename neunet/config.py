@@ -117,3 +117,13 @@ def resolve_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
     cfg["device"] = cfg.get("device", "auto")
 
     return cfg
+
+# --- Backward-compat aliases (used by some branches/CLI code) ---
+def load_yaml(path):
+    return load_config(path)
+
+def save_yaml(cfg, path):
+    return save_config(cfg, path)
+
+def resolve_yaml(cfg):
+    return resolve_config(cfg)

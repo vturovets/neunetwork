@@ -74,18 +74,19 @@ def eval(
 
 @app.command()
 def infer(
-        images: Optional[str] = typer.Argument(None, help="Path to file or directory"),
-        images_opt: Optional[str] = typer.Option(None, "--images", "-i", help="Alias for the same path"),
-        checkpoint: str = typer.Option("models/best.pt"),
-        out: str = typer.Option("runs/infer.json"),
-        topk: int = typer.Option(3, min=1, max=10),
-        recursive: bool = typer.Option(False, "--recursive/--no-recursive"),
+        images: str = typer.Argument(None, help="File or directory of images"),
+        images_opt: str | None = typer.Option(None, "--images", "-i", help="File or directory of images"),
+        checkpoint: str = typer.Option("models/best.pt", help="Path to checkpoint"),
+        out: str = typer.Option("runs/infer.json", help="Where to write predictions JSON"),
+        topk: int = typer.Option(3, help="Top-K predictions to include"),
+        recursive: bool = typer.Option(False, help="Recurse into subfolders"),
+        config: str = typer.Option("configs/default.yaml", help="YAML config for preprocessing/model"),
 ):
-    """Run inference on an image file or directory (top-K predictions)."""
     images_path = images_opt or images
     if not images_path:
-        raise typer.BadParameter("Provide a path via POSITIONAL `IMAGES` or --images/-i.")
-    infermod.infer(images_path, checkpoint, out, topk=topk, recursive=recursive)
+        raise typer.BadParameter("Provide a path via positional `IMAGES` or --images/-i.")
+    infermod.infer(images_path, checkpoint, out, topk=topk, recursive=recursive, config=config)
+    typer.echo(f"Wrote {out}")
 
 
 @app.command("train-log")

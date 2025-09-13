@@ -1,14 +1,125 @@
+# neunet/report.py
 from __future__ import annotations
-from typing import List, Dict, Any, Optional
-import os, json, re, time
-from pathlib import Path
 
-# Default filename/parent-folder label detectors (works for MNIST-style sets)
-DEFAULT_REGEXES = [
+import json
+import os
+import re
+import time
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+# --------------------------------------------------------------------
+# Evaluation report (train/val/test summary)
+# --------------------------------------------------------------------
+
+_EVAL_TPL = """# Evaluation Report
+
+| Metric        | Value |
+|---------------|-------|
+| Test Loss     | {test_loss} |
+| Test Accuracy | {test_acc} |
+
+**Verdict:** {verdict}
+**Verdict reason:** {reason}
+
+## Recommended actions
+{actions}
+"""
+
+_ACTIONS_OK = "- Looks good. You can try deeper/wider layers or a small LR tune for marginal gains."
+_ACTIONS_OVERFIT = """- Stop earlier (use the epoch with best `val_loss`) or enable early stopping.
+- Increase dropout and/or weight decay.
+- Reduce epochs or lower LR; consider gentle data augmentation.
+"""
+_ACTIONS_UNDERFIT = """- Train longer or reduce regularization (dropout/L2).
+- Increase capacity (more/larger layers) or modestly increase LR.
+- Check preprocessing; ensure normalization is correct.
+"""
+
+
+def _pct_change(a: float, b: float) -> float:
+    if a == 0:
+        return 0.0
+    return (b - a) / abs(a)
+
+
+def _trend(vals: List[float]) -> str:
+    if len(vals) < 2:
+        return "flat"
+    ch = _pct_change(float(vals[0]), float(vals[-1]))
+    if ch < -0.05:
+        return "down"
+    if ch > 0.05:
+        return "up"
+    return "flat"
+
+
+def _verdict_from_history(history: Dict[str, Any]) -> Tuple[str, str, str]:
+    tr = [float(x) for x in history.get("train_loss", []) or []]
+    va = [float(x) for x in history.get("val_loss", []) or []]
+
+    # If no history, default OK
+    if not tr and not va:
+        return "OK ✅", "No train/val history available; using test metrics only.", _ACTIONS_OK
+
+    # Underfitting: train loss barely improves
+    if tr and _pct_change(tr[0], tr[-1]) > -0.10:
+        return "Underfitting 💤", "Training loss shows little improvement.", _ACTIONS_UNDERFIT
+
+    # Overfitting: val worsens while train improves or gap grows
+    if tr and va:
+        best_val = min(va)
+        last_val = va[-1]
+        worse_than_best = (last_val - best_val) / best_val if best_val > 0 else 0.0
+        gap = (last_val - tr[-1]) / last_val if last_val > 0 else 0.0
+        if _trend(tr) == "down" and (worse_than_best > 0.05 or gap > 0.5):
+            return "Overfitting ⚠️", "Validation loss worsened while training kept improving (or gap is large).", _ACTIONS_OVERFIT
+
+    return "OK ✅", "Generalization looks acceptable for MNIST.", _ACTIONS_OK
+
+
+def generate_eval_report(metrics_json: str | Path,
+                         out_md: str | Path = "runs/evaluation.md") -> Path:
+    """
+    Build a concise evaluation Markdown from metrics.json.
+    Expects (when available): train_loss[], val_loss[], test_loss, test_acc.
+    """
+    metrics_json = Path(metrics_json)
+    out_md = Path(out_md)
+
+    data: Dict[str, Any] = {}
+    if metrics_json.exists():
+        try:
+            data = json.loads(metrics_json.read_text(encoding="utf-8"))
+        except Exception:
+            data = {}
+
+    test_loss = data.get("test_loss", "n/a")
+    test_acc = data.get("test_acc", data.get("test_accuracy", "n/a"))
+
+    verdict, reason, actions = _verdict_from_history(data)
+    md = _EVAL_TPL.format(
+        test_loss=test_loss,
+        test_acc=test_acc if isinstance(test_acc, str) else f"{float(test_acc):.4f}",
+        verdict=verdict,
+        reason=reason,
+        actions=actions,
+    )
+
+    out_md.parent.mkdir(parents=True, exist_ok=True)
+    out_md.write_text(md, encoding="utf-8")
+    return out_md
+
+# --------------------------------------------------------------------
+# Inference report (kept from your existing behavior)
+# --------------------------------------------------------------------
+
+_DEFAULT_LABEL_REGEXES = [
     r"[_\-\.]label(?P<label>\d)\b",
     r"[\-_](?P<label>\d)\b",
     r"(?P<label>\d)\b",
 ]
+
 
 def _extract_label_from_name(name: str, regexes: List[str]) -> Optional[int]:
     for pat in regexes:
@@ -20,20 +131,20 @@ def _extract_label_from_name(name: str, regexes: List[str]) -> Optional[int]:
                 pass
     return None
 
+
 def _extract_label(path: str, regex: Optional[str]) -> Optional[int]:
     p = Path(path)
     if regex:
         m = re.search(regex, p.name)
-        if m and ("label" in m.groupdict() or m.groups()):
-            g = m.group("label") if "label" in m.groupdict() else m.group(1)
+        if m:
+            g = m.groupdict().get("label") or (m.group(1) if m.groups() else None)
             try:
-                return int(g)
+                return int(g) if g is not None else None
             except Exception:
                 return None
-    lbl = _extract_label_from_name(p.stem, DEFAULT_REGEXES)
+    lbl = _extract_label_from_name(p.stem, _DEFAULT_LABEL_REGEXES)
     if lbl is not None:
         return lbl
-    # Parent folder fallback (e.g., ".../7/img.png")
     try:
         parent = p.parent.name
         if parent.isdigit() and int(parent) in range(10):
@@ -42,7 +153,11 @@ def _extract_label(path: str, regex: Optional[str]) -> Optional[int]:
         pass
     return None
 
+
 def build_report(infer_json_path: str, out_md_path: str, *, label_regex: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Build a Markdown report for inference results (predictions on user images).
+    """
     with open(infer_json_path, "r", encoding="utf-8") as f:
         items = json.load(f)
 
@@ -62,6 +177,7 @@ def build_report(infer_json_path: str, out_md_path: str, *, label_regex: Optiona
             n_errors += 1
             rows.append({"file": fp, "status": "error", "error": err})
             continue
+
         pred = it.get("pred")
         pred_prob = it.get("pred_prob")
         topk = it.get("topk", []) or []
@@ -126,10 +242,11 @@ def build_report(infer_json_path: str, out_md_path: str, *, label_regex: Optiona
             f.write("| file | true | pred | pred_prob | top-3 |\n")
             f.write("|---|---:|---:|---:|---|\n")
             for r in wrong_rows[:200]:
-                # Defensive formatting for top-k
                 def _fmt(d):
-                    try:    return f"{int(d.get('label'))}({float(d.get('prob')):.2f})"
-                    except: return str(d)
+                    try:
+                        return f"{int(d.get('label'))}({float(d.get('prob')):.2f})"
+                    except Exception:
+                        return str(d)
                 top = ", ".join([_fmt(d) for d in (r.get("topk") or [])[:3]])
                 f.write(f"| {r['file']} | {r.get('true','')} | {r.get('pred','')} | {r.get('pred_prob','')} | {top} |\n")
             if len(wrong_rows) > 200:

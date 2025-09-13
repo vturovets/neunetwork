@@ -53,15 +53,14 @@ def _extract_state_dict(blob: Any) -> OrderedDict:
 # ---- image discovery ----
 _IMG_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
 
-
-def _gather_paths(path: str, recursive: bool) -> List[Path]:
+def _gather_paths(path: str) -> list[Path]:
     p = Path(path)
     if not p.exists():
         raise FileNotFoundError(f"Path not found: {p}")
     if p.is_file():
-        return [p]
-    it = p.rglob("*") if recursive else p.glob("*")
-    return [x for x in it if x.is_file() and x.suffix.lower() in _IMG_EXTS]
+        return [p] if p.suffix.lower() in _IMG_EXTS else []
+    # Always recurse into subfolders (common for label-organized datasets)
+    return [x for x in p.rglob("*") if x.is_file() and x.suffix.lower() in _IMG_EXTS]
 
 
 # ---- main API ----
@@ -96,7 +95,7 @@ def infer(images_path: str,
     ])
 
     # gather files
-    files = _gather_paths(images_path, recursive=recursive)
+    files = _gather_paths(images_path)
 
     results: List[Dict[str, Any]] = []
     for fp in files:

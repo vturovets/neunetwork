@@ -142,13 +142,19 @@ def _write_metrics_json(path: Path, history: Dict[str, List[float]]) -> None:
 def _plot_losses(runs_dir: Path, history: Dict[str, List[float]]) -> None:
     """Plot loss curves using Matplotlib defaults (single plot)."""
     try:
+        import matplotlib
+        # Ensure headless backend (avoids Tk/Tcl errors in CI / Windows installs)
+        try:
+            if matplotlib.get_backend().lower() != "agg":
+                matplotlib.use("Agg")  # must be set before importing pyplot
+        except Exception:
+            matplotlib.use("Agg")
         import matplotlib.pyplot as plt
     except Exception:
         return
 
     train_loss = history.get("train_loss", [])
     val_loss = history.get("val_loss", [])
-
     if not train_loss:
         return
 
@@ -157,14 +163,9 @@ def _plot_losses(runs_dir: Path, history: Dict[str, List[float]]) -> None:
     plt.plot(xs, train_loss, label="train_loss")
     if val_loss:
         plt.plot(xs, val_loss, label="val_loss")
-    plt.xlabel("epoch")
-    plt.ylabel("loss")
-    plt.title("Loss Curve")
-    plt.legend()
+    plt.xlabel("epoch"); plt.ylabel("loss"); plt.title("Loss Curve"); plt.legend()
     out = runs_dir / "loss_curve.png"
-    fig.tight_layout()
-    fig.savefig(out)
-    plt.close(fig)
+    fig.tight_layout(); fig.savefig(out); plt.close(fig)
 
 
 def _save_checkpoint(
